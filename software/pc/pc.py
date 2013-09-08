@@ -1,4 +1,4 @@
-import serial, time
+import serial
 import sys
 BAUDRATE = 115200
 PARITY = False
@@ -64,16 +64,5 @@ if __name__ == "__main__":
                 continue
             print x
         except KeyboardInterrupt:
-            try:
-                ser.write('!O')
-                p = ser.readline()
-                print "profile:",p
-                time.sleep(1)
-                set_profile(ser,[2,140*4,150*4,80,200*4,50,2*4,2000,200,0])
-                time.sleep(1)
-                ser.write('!O')
-                p = ser.readline()
-                print "profile:",p
-            except KeyboardInterrupt:
-                ser.close()
-                break
+            ser.close()
+            break
