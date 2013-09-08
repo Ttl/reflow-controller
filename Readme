@@ -1,5 +1,7 @@
-Reflow oven controller.
+Reflow oven controller for toaster oven.
 
+For more information see:
+http://hforsten.com/toaster-oven-reflow-controller.html
 
 Includes code from LUFA:
 http://www.fourwalledcubicle.com/LUFA.php
