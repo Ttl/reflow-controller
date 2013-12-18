@@ -23,7 +23,7 @@
 #define CLAMP(x, l, h) (((x) > (h)) ? (h) : (((x) < (l)) ? (l) : (x)))
 #define SIGN(x) ((x > 0) ? 1 : ((x < 0) ? -1 : 0))
 #define MAXTEMP 340
-#define MIN(x,y) (((x)<(y) ? (x) : (y)))
+//#define MIN(x,y) (((x)<(y) ? (x) : (y)))
 void EVENT_USB_Device_Connect(void);
 void EVENT_USB_Device_Disconnect(void);
 void EVENT_USB_Device_ConfigurationChanged(void);
@@ -52,8 +52,8 @@ typedef enum {
     T_COOL = 4
 } state_enum;
 
-uint16_t target_temp(void);
-uint16_t pid(void);
+uint16_t target_temp(uint16_t temp, uint16_t *timer);
+uint16_t pid(uint16_t, uint16_t);
 void set_profile(void);
 void write_profile(void);
 void output_profile(void);

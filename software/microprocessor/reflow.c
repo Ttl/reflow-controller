@@ -4,13 +4,11 @@
 #define MOSI 2
 #define MISO 3
 
-static volatile bool tx_flag = 0;
+static volatile bool update_pid = 0;
 static volatile bool usb_connected = 0;
-static volatile uint16_t temp = 0;
-static volatile uint16_t room_temp = 0;
-static volatile uint16_t target = 0;
-static volatile uint16_t prev_target = 0;
-static volatile uint16_t timer = 0;/* Timer for various reflow stages */
+
+static uint16_t room_temp = 0;
+static uint16_t prev_target = 0;
 static profile_t profile;
 static profile_t EEMEM eeprom_profile = {
         .start_rate = 1*4,
@@ -20,8 +18,8 @@ static profile_t EEMEM eeprom_profile = {
         .peak_temp = 200*4,
         .time_to_peak = 80,
         .cool_rate = 2*4,
-        .pid_p = 800,
-        .pid_i = 400,
+        .pid_p = 360,
+        .pid_i = 80,
         .pid_d = 0
 };
 
@@ -29,7 +27,6 @@ static state_enum reflow_state;
 static int16_t integral = 0;
 static int16_t last_error = 0;
 static int8_t PID_debug = 0;
-static volatile uint8_t target_update = 0;
 
 static FILE USBSerialStream;
 
@@ -110,7 +107,7 @@ void output_profile(void) {
 }
 
 /* Get the target temperature */
-uint16_t target_temp(void) {
+uint16_t target_temp(uint16_t temp, uint16_t *timer) {
     uint16_t target = 0;
     switch(reflow_state) {
         case(T_STOP):
@@ -122,32 +119,32 @@ uint16_t target_temp(void) {
              * isn't yet on. */
             target = CLAMP(target,room_temp,MIN(profile.soak_temp1,temp+profile.start_rate*5));
             if (temp > profile.soak_temp1 - 4*5) {
-                timer = 0;
+                *timer = 0;
                 reflow_state = T_SOAK;
             }
             break;
         case(T_SOAK):
             /* Linear interpolation from soak_temp1 to soak_temp2 in soak_length
              * seconds */
-            if (timer < profile.soak_length) {
+            if ( (*timer) < profile.soak_length) {
                 target = profile.soak_temp1 +
-                   (timer*(profile.soak_temp2-profile.soak_temp1))/profile.soak_length;
+                   ((*timer)*(profile.soak_temp2-profile.soak_temp1))/profile.soak_length;
             } else {
                 target = profile.soak_temp2;
                 if (temp > profile.soak_temp2 - 4*10) {
-                    timer = 0;
+                    *timer = 0;
                     reflow_state = T_PEAK;
                 }
             }
             break;
         case(T_PEAK):
-            if (timer < profile.time_to_peak) {
+            if ( (*timer) < profile.time_to_peak) {
                 target = profile.soak_temp2 +
-                   (timer*(profile.peak_temp-profile.soak_temp2))/profile.time_to_peak;
+                   ((*timer)*(profile.peak_temp-profile.soak_temp2))/profile.time_to_peak;
             } else {
                 target = profile.peak_temp;
                 if (temp > target) {
-                    timer = 0;
+                    *timer = 0;
                     integral = 0; /* Zero integral term of PID for faster response */
                     reflow_state = T_COOL;
                 }
@@ -207,7 +204,7 @@ void usb_rx(void) {
     return;
 }
 
-void read_sensor(void) {
+uint16_t read_sensor(void) {
 /* Bits:
  * 31 : sign,
  * 30 - 18 : thermocouple temperature,
@@ -221,6 +218,7 @@ void read_sensor(void) {
 
     /* Enable slave */
     uint8_t sensor[4];
+    uint16_t temp;
     int8_t i;
     /* SS = 0 */
     PORTB = (0<<SS);
@@ -262,6 +260,7 @@ void read_sensor(void) {
 
     /* Disable slave */
     PORTB = (1<<SS);
+    return temp;
 }
 
 void setupHardware(void) {
@@ -314,38 +313,25 @@ uint16_t approx_pwm(uint16_t target)
     return (uint16_t)CLAMP(t,0,_ICR1);
 }
 
-uint16_t pid(void) {
-	int16_t error = target - temp;
+
+uint16_t pid(uint16_t target, uint16_t temp) {
+	int32_t error = (int32_t)target - (int32_t)temp;
 	if (target == 0) {
 		integral = 0;
 		last_error = error;
 		return 0;
 	} else {
 
+		int32_t p_term = profile.pid_p * error;
+		int32_t i_term = integral * profile.pid_i;
+		int32_t d_term = (last_error - error) * profile.pid_d;
+
 		int16_t new_integral = integral + error;
         /* Clamp integral to a reasonable value */
-        new_integral = CLAMP(new_integral,-_ICR1,_ICR1);
-
-		int32_t p_term = profile.pid_p * error;
-		int32_t i_term = new_integral * profile.pid_i;
-		int32_t d_term = (last_error - error) * profile.pid_d;
+        new_integral = CLAMP(new_integral,-4*100,4*100);
 
 		last_error = error;
 
-        /* Detect overflow */
-        if ((error != 0) && (SIGN(p_term) != SIGN(profile.pid_p)*SIGN(error))) {
-            p_term = -SIGN(p_term)*65535;
-        }
-        if ((integral != 0) && (SIGN(i_term) != SIGN(profile.pid_i)*SIGN(integral))) {
-            i_term = -SIGN(i_term)*65535;
-        }
-        if (((last_error-error) != 0) && (SIGN(d_term) != SIGN(profile.pid_d)*SIGN(last_error-error))) {
-            d_term = -SIGN(d_term)*65535;
-        }
-        /* Clamp terms */
-        p_term = CLAMP(p_term,-65536,65535);
-        i_term = CLAMP(i_term,-65536,65535);
-        d_term = CLAMP(d_term,-65536,65535);
 		int32_t result = approx_pwm(target) + p_term + i_term + d_term;
 
         /* Avoid integral buildup */
@@ -360,11 +346,20 @@ uint16_t pid(void) {
 
 int main(void) {
 
+    uint8_t target_update = 0;
+    bool tx_flag = 0;
+    uint16_t temp = 0;
+    uint16_t target = 0;
+    uint16_t timer = 0;/* Timer for various reflow stages */
+
     setupHardware();
     set_profile();
 	GlobalInterruptEnable();
 
     reflow_state = T_START;
+    temp = read_sensor();
+    target = target_temp(temp, &timer);
+    timer++;
 
     while(1)
     {
@@ -383,22 +378,26 @@ int main(void) {
                 fprintf(&USBSerialStream, ",I:%d", integral);
             fprintf(&USBSerialStream, "\n");
         }
+        if (update_pid) {
+            /* Update target once per second */
+            if (target_update++ == 5) {
+                target_update = 0;
+                target = target_temp(temp, &timer);
+                timer++;
+                tx_flag = 1;
+            }
+            /* Read the current temperature, updates temp and room_temp */
+            temp = read_sensor();
+            update_pid = 0;
+            OCR1A = pid(target, temp);
+        }
     }
 }
 
 
 ISR(TIMER1_COMPB_vect) {
-    /* Update target once per second */
-    if (target_update++ == 5) {
-        target_update = 0;
-        target = target_temp();
-        timer++;
-        tx_flag = 1;
-    }
-    /* Read the current temperature, updates temp and room_temp */
-    read_sensor();
     /* Set PWM */
-    OCR1A = pid();
+    update_pid = 1;
 }
 
 
