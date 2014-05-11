@@ -47,6 +47,14 @@ def print_profile(settings):
     print "PID I",settings[8]
     print "PID D",settings[9]
 
+def write_profile(ser, settings):
+    """Writes a correctly formatted list of settings to device"""
+    u16s = map(u16_to_chars,settings)
+    #Flatten the list
+    u16s = [item for sublist in u16s for item in sublist]
+    u16s = ''.join(u16s)
+    ser.write('!W'+u16s)
+
 def set_pid(ser, settings):
     if len(settings) == 3:
         current = get_profile(ser)[:7]
@@ -54,13 +62,8 @@ def set_pid(ser, settings):
         settings = current
     else:
         raise ValueError("set_pid needs 3 values")
-    print settings
     settings = map(int,settings)
-    u16s = map(u16_to_chars,settings)
-    #Flatten list
-    u16s = [item for sublist in u16s for item in sublist]
-    u16s = ''.join(u16s)
-    ser.write('!W'+u16s)
+    write_profile(ser, settings)
     print "New profile:"
     print_profile(get_profile(ser))
 
@@ -85,11 +88,7 @@ def set_profile(ser,settings):
     for i in (0,1,2,4,6):
         settings[i] *=4
     settings = map(int,settings)
-    u16s = map(u16_to_chars,settings)
-    #Flatten list
-    u16s = [item for sublist in u16s for item in sublist]
-    u16s = ''.join(u16s)
-    ser.write('!W'+u16s)
+    write_profile(ser, settings)
     print "New profile:"
     print_profile(get_profile(ser))
 
@@ -109,12 +108,10 @@ def print_status(s):
                 temp,room,target,pwm,state)
         except:
             print s
-            return
     else:
         print s
 
 if __name__ == "__main__":
-
     parser = argparse.ArgumentParser(description="Reflow oven controller program")
     parser.add_argument('-s','--set', nargs=7, metavar=('start_rate', 'soak_temp_start',
         'soak_temp_end', 'soak_length', 'peak_temp', 'time_to_peak', 'cool_rate'), type=float, help='Set temperature profile')
@@ -124,16 +121,15 @@ if __name__ == "__main__":
     parser.set_defaults(get=False)
     args = parser.parse_args()
 
-    port = args.port
     if len(sys.argv)<2:
         print "Give serial port address as a command line argument."
         exit()
     try:
-        ser = configure_serial(port)
+        ser = configure_serial(args.port)
         if not ser.isOpen():
             raise Exception
     except:
-        print 'Opening serial port {} failed.'.format(port)
+        print 'Opening serial port {} failed.'.format(args.port)
         exit(1)
 
     if args.set != None:
