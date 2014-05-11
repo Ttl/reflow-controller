@@ -23,6 +23,18 @@ def u16_to_chars(u16):
     a,b = u16>>8,u16&(~(0xff<<8))
     return chr(a),chr(b)
 
+def start_reflow(ser):
+    ser.write('!S')
+
+def stop_reflow(ser):
+    ser.write('!H')
+
+def pid_debug(ser, enable=True):
+    if enable:
+        ser.write('!D')
+    else:
+        ser.write('!d')
+
 def get_profile(ser):
     ser.write('!O')
     while True:
@@ -132,6 +144,8 @@ if __name__ == "__main__":
         print 'Opening serial port {} failed.'.format(args.port)
         exit(1)
 
+    stop_reflow(ser)
+
     if args.set != None:
         set_profile(ser, args.set)
 
@@ -140,6 +154,8 @@ if __name__ == "__main__":
 
     if args.get:
         print_profile(get_profile(ser))
+
+    start_reflow(ser)
 
     while True:
         try:
