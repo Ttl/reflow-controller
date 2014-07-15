@@ -2,9 +2,45 @@ import serial
 import sys
 import argparse
 import ast
+import time
+from collections import deque
+
+import matplotlib.pyplot as plt
+import matplotlib.animation as animation
+
 BAUDRATE = 115200
 PARITY = False
 PWM_MAX = 6250
+
+class AnalogPlot:
+    def __init__(self, ser, maxlen):
+        self.x = deque([0]*maxlen, maxlen)
+        self.y1 = deque([0]*maxlen, maxlen)
+        self.y2 = deque([0]*maxlen, maxlen)
+        self.maxlen = maxlen
+        self.starttime = time.time()
+        self.ser = ser
+
+    def add(self, status):
+        #Only add datapoint when it's possible to add in
+        #both plots
+        if 'temp' in status and 'target' in status:
+            self.x.appendleft(time.time() - self.starttime)
+            self.y1.appendleft(status['temp'])
+            self.y2.appendleft(status['target'])
+
+    def update(self, frameNum, p0, p1, ax):
+        try:
+            status = get_status(self.ser)
+            self.add(status)
+            print_status(status)
+        except TypeError:
+            pass
+        ax.set_xlim(self.x[-1], max(10,self.x[0]))
+        ax.set_ylim((0, max(250,max(self.y2),max(self.y1))))
+        p0.set_data(self.x, self.y1)
+        p1.set_data(self.x, self.y2)
+        return (p0,p1,ax)
 
 #Configures serial port
 def configure_serial(serial_port):
@@ -14,6 +50,7 @@ def configure_serial(serial_port):
         parity=serial.PARITY_EVEN if PARITY else serial.PARITY_NONE,
         stopbits=serial.STOPBITS_TWO,
         bytesize=serial.EIGHTBITS,
+        timeout=0.05
     )
 
 def u16_to_chars(u16):
@@ -104,8 +141,9 @@ def set_profile(ser,settings):
     print "New profile:"
     print_profile(get_profile(ser))
 
-def print_status(s):
+def get_status(ser):
     states = ['Stop','Preheat','Soak','Peak','Cool']
+    s = ser.readline()
     s = s.strip()
     s = s.replace(':',',')
     status = s.split(',')
@@ -116,12 +154,16 @@ def print_status(s):
             target = float(status[5])/4
             pwm = float(status[7])/PWM_MAX
             state = states[int(status[9])]
-            print 'Temp: {:3.2f}, Room: {:3.2f}, Target: {:3.2f}, PWM: {:1.2f}, State: {}'.format(
-                temp,room,target,pwm,state)
+            return {'temp':temp, 'room':room, 'target':target, 'pwm':pwm, 'state':state}
         except:
-            print s
-    else:
-        print s
+            pass
+    return None
+
+def print_status(status):
+    try:
+        print 'Temp: {temp:3.2f}, Room: {room:3.2f}, Target: {target:3.2f}, PWM: {pwm:1.2f}, State: {state}'.format(**status)
+    except (TypeError, KeyError):
+        print
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Reflow oven controller program")
@@ -129,8 +171,10 @@ if __name__ == "__main__":
         'soak_temp_end', 'soak_length', 'peak_temp', 'time_to_peak', 'cool_rate'), type=float, help='Set temperature profile')
     parser.add_argument('-p','--set_pid', nargs=3, metavar=('P','I','D'), type=float, help='Set PID coefficients')
     parser.add_argument('-g','--get', action='store_true', help='Get the current profile')
+    parser.add_argument('-l','--plot', dest='plot', action='store_true', help="Draw plot")
+    parser.add_argument('-n','--no-plot', dest='plot', action='store_false', help="Don't draw plot")
     parser.add_argument('port',metavar='Port', help='Serial port')
-    parser.set_defaults(get=False)
+    parser.set_defaults(get=False, plot=True)
     args = parser.parse_args()
 
     if len(sys.argv)<2:
@@ -155,15 +199,30 @@ if __name__ == "__main__":
     if args.get:
         print_profile(get_profile(ser))
 
-    start_reflow(ser)
+    if args.plot:
+        analogPlot = AnalogPlot(ser, 600)
+
+        fig = plt.figure()
+        ax = plt.axes(xlim=(0, 100), ylim=(0, 300))
+        p0, = ax.plot([], [])
+        p1, = ax.plot([], [])
+
+        anim = animation.FuncAnimation(fig, analogPlot.update,
+                                         fargs=(p0,p1,ax),
+                                         interval=10)
+        start_reflow(ser)
+        plt.show()
+        exit()
 
     while True:
         try:
             try:
-                x = print_status(ser.readline())
+                print_status(get_status(ser))
             except serial.serialutil.SerialException:
                 continue
             except OSError:
+                continue
+            except KeyError:
                 continue
         except KeyboardInterrupt:
             ser.close()
