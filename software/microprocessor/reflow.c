@@ -13,9 +13,9 @@ static profile_t profile;
 static profile_t EEMEM eeprom_profile = {
         .start_rate = 1*4,
         .soak_temp1 = 100*4,
-        .soak_temp2 = 110*4,
-        .soak_length = 100,
-        .peak_temp = 200*4,
+        .soak_temp2 = 130*4,
+        .soak_length = 60,
+        .peak_temp = 245*4,
         .time_to_peak = 80,
         .cool_rate = 2*4,
         .pid_p = 360,
@@ -128,7 +128,7 @@ uint16_t target_temp(uint16_t temp, uint16_t *timer) {
              * seconds */
             if ( (*timer) < profile.soak_length) {
                 target = profile.soak_temp1 +
-                   ((*timer)*(profile.soak_temp2-profile.soak_temp1))/profile.soak_length;
+                   ((int32_t)(*timer)*((int32_t)profile.soak_temp2-(int32_t)profile.soak_temp1))/profile.soak_length;
             } else {
                 target = profile.soak_temp2;
                 if (temp > profile.soak_temp2 - 4*10) {
@@ -140,7 +140,7 @@ uint16_t target_temp(uint16_t temp, uint16_t *timer) {
         case(T_PEAK):
             if ( (*timer) < profile.time_to_peak) {
                 target = profile.soak_temp2 +
-                   ((*timer)*(profile.peak_temp-profile.soak_temp2))/profile.time_to_peak;
+                   ((int32_t)(*timer)*((int32_t)profile.peak_temp-(int32_t)profile.soak_temp2))/profile.time_to_peak;
             } else {
                 target = profile.peak_temp;
                 if (temp > target) {
@@ -151,7 +151,11 @@ uint16_t target_temp(uint16_t temp, uint16_t *timer) {
             }
             break;
         case(T_COOL):
-            target = prev_target-profile.cool_rate;
+            if (prev_target > profile.cool_rate) {
+                target = prev_target-profile.cool_rate;
+            } else {
+                target = 0;
+            }
             if (target < room_temp) {
                 reflow_state = T_STOP;
             }
@@ -309,7 +313,7 @@ void setupHardware(void) {
 uint16_t approx_pwm(uint16_t target)
 {
     int32_t t;
-	t = ((_ICR1*(target-room_temp)) / (MAXTEMP*4));
+	t = (((int32_t)_ICR1*(target-room_temp)) / (MAXTEMP*4));
     return (uint16_t)CLAMP(t,0,_ICR1);
 }
 
@@ -322,20 +326,20 @@ uint16_t pid(uint16_t target, uint16_t temp) {
 		return 0;
 	} else {
 
-		int32_t p_term = profile.pid_p * error;
-		int32_t i_term = integral * profile.pid_i;
-		int32_t d_term = (last_error - error) * profile.pid_d;
+		int32_t p_term = (int32_t)profile.pid_p * error;
+		int32_t i_term = (int32_t)integral * (int32_t)profile.pid_i;
+		int32_t d_term = ((int32_t)last_error - error) * (int32_t)profile.pid_d;
 
-		int16_t new_integral = integral + error;
+		int32_t new_integral_32 = (int32_t)integral + error;
         /* Clamp integral to a reasonable value */
-        new_integral = CLAMP(new_integral,-4*100,4*100);
+        int16_t new_integral = (int16_t)CLAMP(new_integral_32,-4*100,4*100);
 
 		last_error = error;
 
 		int32_t result = approx_pwm(target) + p_term + i_term + d_term;
 
         /* Avoid integral buildup */
-		if ((result >= _ICR1 && new_integral < integral) || (result < 0 && new_integral > integral) || (result <= _ICR1 && result >= 0)) {
+		if (((result >= _ICR1 || result < 0) && abs(new_integral) < abs(integral)) || (result >= 0 && result <= _ICR1)) {
             integral = new_integral;
 		}
 
